@@ -10,6 +10,9 @@ import java.awt.AlphaComposite;
 import java.util.Random;
 import java.util.HashSet;
 import java.util.Set;
+import javax.sound.sampled.*;
+import java.io.File;
+import java.io.IOException;
 
 public class GameBoard extends JPanel {
     // Constantes para o tamanho do tabuleiro e das gemas
@@ -26,6 +29,7 @@ public class GameBoard extends JPanel {
     private int score = 0; // Pontuação do jogador
     private JLabel scoreLabel = new JLabel("Pontuação: 0"); // Label para mostrar a pontuação
     private boolean animating = false; // Estado para bloquear interação durante animações
+    private Image explosionImg = null;
 
     // Construtor: inicializa o painel e o tabuleiro
     public GameBoard() {
@@ -49,6 +53,22 @@ public class GameBoard extends JPanel {
         scoreLabel.setHorizontalAlignment(SwingConstants.CENTER);
         add(scoreLabel, BorderLayout.NORTH);
         updateBoard();
+        try {
+            explosionImg = new ImageIcon("explosion/explosion.png").getImage();
+            if (explosionImg == null || explosionImg.getWidth(null) == -1) {
+                // Se falhar, tenta caminho absoluto
+                explosionImg = new ImageIcon("C:/Users/luisl/Desktop/bejeweled/explosion/explosion.png").getImage();
+                if (explosionImg == null || explosionImg.getWidth(null) == -1) {
+                    System.err.println("Imagem de explosão não encontrada!");
+                } else {
+                    System.out.println("Imagem de explosão carregada via caminho absoluto.");
+                }
+            } else {
+                System.out.println("Imagem de explosão carregada via caminho relativo.");
+            }
+        } catch (Exception e) {
+            System.err.println("Não foi possível carregar a imagem de explosão.");
+        }
     }
 
     // Inicializa o tabuleiro com gemas aleatórias
@@ -205,8 +225,23 @@ public class GameBoard extends JPanel {
         return toRemove;
     }
 
+    // Utilitário para tocar um ficheiro de som wav
+    private void playSound(String filename) {
+        try {
+            File soundFile = new File(filename);
+            if (!soundFile.exists()) return;
+            AudioInputStream audioIn = AudioSystem.getAudioInputStream(soundFile);
+            Clip clip = AudioSystem.getClip();
+            clip.open(audioIn);
+            clip.start();
+        } catch (Exception e) {
+            System.err.println("Erro ao tocar som: " + filename + " - " + e.getMessage());
+        }
+    }
+
     // Animação de deslize (slide) entre duas gemas adjacentes
     private void animateSlide(int r1, int c1, int r2, int c2, Runnable onComplete) {
+        playSound("sounds/swap.wav"); // Efeito sonoro de troca
         final int frames = 8;
         final ImageIcon icon1 = (board[r1][c1] != null) ? resizeIcon(board[r1][c1].getIcon(), GEM_SIZE, GEM_SIZE) : emptyIcon();
         final ImageIcon icon2 = (board[r2][c2] != null) ? resizeIcon(board[r2][c2].getIcon(), GEM_SIZE, GEM_SIZE) : emptyIcon();
@@ -233,17 +268,33 @@ public class GameBoard extends JPanel {
         timer.start();
     }
 
-    // Explosão (zoom) das gemas em combinação antes do fade-out
-    private void animateExplosion(Set<Point> toExplode, Runnable onComplete) {
-        final int frames = 6;
-        Timer timer = new Timer(30, null);
+    // Mostra a imagem de explosão estática em todas as posições a explodir, depois chama onComplete após delay
+    private void showExplosionImages(Set<Point> toExplode, Runnable onComplete) {
+        for (Point p : toExplode) {
+            buttons[p.x][p.y].setIcon(explosionIcon(1.0f, 1.0f)); // explosão tamanho normal, totalmente opaca
+        }
+        updateBoard();
+        playSound("sounds/explosion.wav"); // Toca o som exatamente quando as imagens aparecem
+        // Espera 300ms antes de iniciar o fade-out
+        new Timer(300, new ActionListener() {
+            public void actionPerformed(ActionEvent e) {
+                ((Timer)e.getSource()).stop();
+                onComplete.run();
+            }
+        }).start();
+    }
+
+    // Animação de fade-out da explosão, com som sincronizado
+    private void animateExplosionFade(Set<Point> toExplode, Runnable onComplete) {
+        final int frames = 10;
+        Timer timer = new Timer(40, null);
         timer.addActionListener(new ActionListener() {
             int step = 0;
             public void actionPerformed(ActionEvent e) {
-                float scale = 1.0f + 0.3f * (float)Math.sin(Math.PI * step / frames); // efeito "zoom"
+                float scale = 1.0f;
+                float alpha = 1.0f - (float)step/frames;
                 for (Point p : toExplode) {
-                    if (board[p.x][p.y] != null)
-                        buttons[p.x][p.y].setIcon(scaledIcon(board[p.x][p.y].getIcon(), (int)(GEM_SIZE*scale), (int)(GEM_SIZE*scale)));
+                    buttons[p.x][p.y].setIcon(explosionIcon(scale, alpha));
                 }
                 updateBoard();
                 step++;
@@ -256,16 +307,21 @@ public class GameBoard extends JPanel {
         timer.start();
     }
 
-    // Utilitário para criar um ícone redimensionado (para o efeito de zoom)
-    private ImageIcon scaledIcon(ImageIcon icon, int width, int height) {
-        Image img = icon.getImage();
-        Image resized = img.getScaledInstance(width, height, Image.SCALE_SMOOTH);
-        BufferedImage bimg = new BufferedImage(GEM_SIZE, GEM_SIZE, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g2 = bimg.createGraphics();
-        int x = (GEM_SIZE-width)/2, y = (GEM_SIZE-height)/2;
-        g2.drawImage(resized, x, y, width, height, null);
+    // Cria um ícone de explosão redimensionado e com transparência
+    private ImageIcon explosionIcon(float scale, float alpha) {
+        int size = (int)(GEM_SIZE * scale);
+        BufferedImage img = new BufferedImage(GEM_SIZE, GEM_SIZE, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2 = img.createGraphics();
+        g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, alpha));
+        int x = (GEM_SIZE-size)/2, y = (GEM_SIZE-size)/2;
+        if (explosionImg != null && explosionImg.getWidth(null) > 0)
+            g2.drawImage(explosionImg, x, y, size, size, null);
+        else {
+            g2.setColor(Color.RED);
+            g2.fillOval(x, y, size, size);
+        }
         g2.dispose();
-        return new ImageIcon(bimg);
+        return new ImageIcon(img);
     }
 
     // MÉTODO PRINCIPAL DE ANIMAÇÃO (substitui processCombinations):
@@ -277,27 +333,26 @@ public class GameBoard extends JPanel {
             updateBoard();
             return;
         }
-        // Atualiza a pontuação ANTES da animação (cada gema removida vale 10 pontos)
         score += toRemove.size() * 10;
-        updateBoard(); // Atualiza o label da pontuação imediatamente
-        // Explosão (zoom) antes do fade-out
-        animateExplosion(toRemove, () -> {
-            new FadeOutAnimation(toRemove, () -> {
+        updateBoard();
+        // 1. Mostra imagem de explosão
+        showExplosionImages(toRemove, () -> {
+            // 2. Fade-out + som sincronizado
+            animateExplosionFade(toRemove, () -> {
+                // 3. Remover gemas, aplicar gravidade, etc.
                 for (Point p : toRemove) {
                     board[p.x][p.y] = null;
                 }
-                // Anima a queda das gemas
                 animateGravity(() -> {
                     fillEmptySpaces();
                     updateBoard();
-                    // Verifica se há novas combinações
                     if (hasCombination()) {
-                        animateCombinations(); // Chama recursivamente para combos
+                        animateCombinations();
                     } else {
                         animating = false;
                     }
                 });
-            }).start();
+            });
         });
     }
 
