@@ -110,25 +110,32 @@ public class GameBoard extends JPanel {
     private void handleGemClick(int row, int col) {
         if (animating) return; // Bloqueia interação durante animações
         if (selectedRow == -1 && selectedCol == -1) {
-            // Primeira seleção: destaca a gema
             selectedRow = row;
             selectedCol = col;
             buttons[row][col].setBorder(BorderFactory.createLineBorder(Color.YELLOW, 3));
         } else {
-            // Segunda seleção: tenta trocar as gemas se forem vizinhas
             if (isAdjacent(selectedRow, selectedCol, row, col)) {
-                swapGems(selectedRow, selectedCol, row, col);
-                // Só aceita a troca se gerar combinação
-                if (hasCombination()) {
-                    animateCombinations(); // Chama animação avançada
-                } else {
-                    // Se não houver combinação, desfaz a troca
-                    swapGems(selectedRow, selectedCol, row, col);
-                }
+                // Guardar os valores antes de limpar a seleção!
+                final int prevRow = selectedRow;
+                final int prevCol = selectedCol;
+                final int targetRow = row;
+                final int targetCol = col;
+                animating = true;
+                animateSlide(prevRow, prevCol, targetRow, targetCol, () -> {
+                    swapGems(prevRow, prevCol, targetRow, targetCol);
+                    if (hasCombination()) {
+                        animateCombinations();
+                    } else {
+                        animateSlide(targetRow, targetCol, prevRow, prevCol, () -> {
+                            swapGems(prevRow, prevCol, targetRow, targetCol);
+                            updateBoard();
+                            animating = false;
+                        });
+                    }
+                });
             }
-            buttons[selectedRow][selectedCol].setBorder(null); // Remove destaque
-            selectedRow = selectedCol = -1; // Limpa seleção
-            updateBoard(); // Atualiza o tabuleiro
+            buttons[selectedRow][selectedCol].setBorder(null);
+            selectedRow = selectedCol = -1;
         }
     }
 
@@ -198,6 +205,69 @@ public class GameBoard extends JPanel {
         return toRemove;
     }
 
+    // Animação de deslize (slide) entre duas gemas adjacentes
+    private void animateSlide(int r1, int c1, int r2, int c2, Runnable onComplete) {
+        final int frames = 8;
+        final ImageIcon icon1 = (board[r1][c1] != null) ? resizeIcon(board[r1][c1].getIcon(), GEM_SIZE, GEM_SIZE) : emptyIcon();
+        final ImageIcon icon2 = (board[r2][c2] != null) ? resizeIcon(board[r2][c2].getIcon(), GEM_SIZE, GEM_SIZE) : emptyIcon();
+        Timer timer = new Timer(20, null);
+        timer.addActionListener(new ActionListener() {
+            int step = 0;
+            public void actionPerformed(ActionEvent e) {
+                step++;
+                // Desenha os ícones "a meio caminho" (simulação simples)
+                // Para efeito visual, alterna os ícones entre os botões
+                if (step % 2 == 0) {
+                    buttons[r1][c1].setIcon(icon2);
+                    buttons[r2][c2].setIcon(icon1);
+                } else {
+                    buttons[r1][c1].setIcon(icon1);
+                    buttons[r2][c2].setIcon(icon2);
+                }
+                if (step >= frames) {
+                    timer.stop();
+                    onComplete.run();
+                }
+            }
+        });
+        timer.start();
+    }
+
+    // Explosão (zoom) das gemas em combinação antes do fade-out
+    private void animateExplosion(Set<Point> toExplode, Runnable onComplete) {
+        final int frames = 6;
+        Timer timer = new Timer(30, null);
+        timer.addActionListener(new ActionListener() {
+            int step = 0;
+            public void actionPerformed(ActionEvent e) {
+                float scale = 1.0f + 0.3f * (float)Math.sin(Math.PI * step / frames); // efeito "zoom"
+                for (Point p : toExplode) {
+                    if (board[p.x][p.y] != null)
+                        buttons[p.x][p.y].setIcon(scaledIcon(board[p.x][p.y].getIcon(), (int)(GEM_SIZE*scale), (int)(GEM_SIZE*scale)));
+                }
+                updateBoard();
+                step++;
+                if (step > frames) {
+                    timer.stop();
+                    onComplete.run();
+                }
+            }
+        });
+        timer.start();
+    }
+
+    // Utilitário para criar um ícone redimensionado (para o efeito de zoom)
+    private ImageIcon scaledIcon(ImageIcon icon, int width, int height) {
+        Image img = icon.getImage();
+        Image resized = img.getScaledInstance(width, height, Image.SCALE_SMOOTH);
+        BufferedImage bimg = new BufferedImage(GEM_SIZE, GEM_SIZE, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2 = bimg.createGraphics();
+        int x = (GEM_SIZE-width)/2, y = (GEM_SIZE-height)/2;
+        g2.drawImage(resized, x, y, width, height, null);
+        g2.dispose();
+        return new ImageIcon(bimg);
+    }
+
     // MÉTODO PRINCIPAL DE ANIMAÇÃO (substitui processCombinations):
     private void animateCombinations() {
         animating = true;
@@ -207,24 +277,25 @@ public class GameBoard extends JPanel {
             updateBoard();
             return;
         }
-        // Efeito de fade-out
-        new FadeOutAnimation(toRemove, () -> {
-            // Depois do fade, remove as gemas
-            for (Point p : toRemove) {
-                board[p.x][p.y] = null;
-            }
-            // Anima a queda das gemas
-            animateGravity(() -> {
-                fillEmptySpaces();
-                updateBoard();
-                // Verifica se há novas combinações
-                if (hasCombination()) {
-                    animateCombinations(); // Chama recursivamente para combos
-                } else {
-                    animating = false;
+        // Explosão (zoom) antes do fade-out
+        animateExplosion(toRemove, () -> {
+            new FadeOutAnimation(toRemove, () -> {
+                for (Point p : toRemove) {
+                    board[p.x][p.y] = null;
                 }
-            });
-        }).start();
+                // Anima a queda das gemas
+                animateGravity(() -> {
+                    fillEmptySpaces();
+                    updateBoard();
+                    // Verifica se há novas combinações
+                    if (hasCombination()) {
+                        animateCombinations(); // Chama recursivamente para combos
+                    } else {
+                        animating = false;
+                    }
+                });
+            }).start();
+        });
     }
 
     // CLASSE PARA ANIMAÇÃO DE FADE-OUT
