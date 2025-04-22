@@ -277,6 +277,9 @@ public class GameBoard extends JPanel {
             updateBoard();
             return;
         }
+        // Atualiza a pontuação ANTES da animação (cada gema removida vale 10 pontos)
+        score += toRemove.size() * 10;
+        updateBoard(); // Atualiza o label da pontuação imediatamente
         // Explosão (zoom) antes do fade-out
         animateExplosion(toRemove, () -> {
             new FadeOutAnimation(toRemove, () -> {
